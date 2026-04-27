@@ -21,6 +21,10 @@ API_PORT = 8000
 JUHE_API_KEY = os.getenv("JUHE_API_KEY", "")
 JUHE_API_BASE_URL = "https://apis.juhe.cn/fapig/football"
 
+# football-data.org API配置
+FOOTBALL_DATA_API_TOKEN = os.getenv("FOOTBALL_DATA_API_TOKEN", "")
+FOOTBALL_DATA_BASE_URL = "https://api.football-data.org/v4"
+
 # 数据采集配置
 DATA_UPDATE_INTERVAL_HOURS = 24
 
@@ -52,6 +56,29 @@ JUHE_LEAGUE_MAP = {
     "法甲": "fajia",
     "中超": "zhongchao",
     "江苏城市足球联赛": "jiangsu",
+}
+
+# football-data.org 联赛代码映射
+FOOTBALL_DATA_LEAGUE_MAP = {
+    "英超": "PL",
+    "西甲": "PD",
+    "德甲": "BL1",
+    "意甲": "SA",
+    "法甲": "FL1",
+    "英冠": "ELC",
+    "荷甲": "DED",
+    "葡超": "PPL",
+    "欧冠": "CL",
+    "欧联": "EL",
+}
+
+# football-data.org 联赛代码到内部联赛ID的映射
+FOOTBALL_DATA_CODE_TO_LEAGUE = {
+    "PL": 1,
+    "PD": 2,
+    "BL1": 3,
+    "SA": 4,
+    "FL1": 5,
 }
 
 # 比赛结果常量

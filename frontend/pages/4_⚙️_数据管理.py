@@ -9,6 +9,7 @@ import pandas as pd
 
 from app.database import get_connection, get_all_teams, get_all_leagues, get_db
 from app.services.data_collector import fetch_external_data
+from app.services.football_data_collector import fetch_football_data, fetch_historical_data
 
 st.set_page_config(page_title="数据管理", page_icon="⚙️", layout="wide")
 
@@ -175,45 +176,111 @@ try:
     with tab3:
         """API数据刷新"""
         st.subheader("API数据刷新")
-        st.markdown("从聚合数据API获取最新的联赛积分榜和赛程数据")
 
-        # API配置状态
-        from app.config import JUHE_API_KEY
-        if JUHE_API_KEY:
-            st.success("API密钥已配置")
+        # 数据源选择
+        data_source = st.radio(
+            "选择数据源",
+            ["football-data.org（推荐）", "聚合数据（Juhe）"],
+            key="data_source",
+            help="football-data.org 提供更完整的历史数据，推荐使用"
+        )
+
+        if data_source.startswith("football-data"):
+            # football-data.org 数据源
+            from app.config import FOOTBALL_DATA_API_TOKEN
+            if FOOTBALL_DATA_API_TOKEN:
+                st.success("API Token 已配置")
+            else:
+                st.error("API Token 未配置，请在 .env 文件中设置 FOOTBALL_DATA_API_TOKEN")
+
+            st.markdown("### 获取当前赛季数据")
+            st.markdown("获取五大联赛当前赛季的积分榜和已完赛比赛数据")
+
+            if st.button("🔄 获取当前赛季数据", type="primary",
+                         use_container_width=True, disabled=(not FOOTBALL_DATA_API_TOKEN)):
+                with st.spinner("正在从 football-data.org 获取数据，请稍候..."):
+                    try:
+                        stats = fetch_football_data()
+                        st.success(
+                            f"获取完成！联赛: {stats['leagues']}, "
+                            f"新球队: {stats['teams']}, 新比赛: {stats['matches']}"
+                        )
+                        if stats["errors"]:
+                            for err in stats["errors"]:
+                                st.warning(err)
+                    except Exception as e:
+                        st.error(f"获取失败: {e}")
+
+            st.markdown("### 获取历史赛季数据")
+            st.markdown("获取过去N个赛季的完整比赛数据（模型训练需要大量历史数据）")
+
+            seasons_back = st.number_input(
+                "获取过去几个赛季", min_value=1, max_value=10, value=3,
+                key="fd_seasons_back",
+                help="football-data.org 支持查询历史赛季，建议获取3个赛季"
+            )
+
+            if st.button("📚 获取历史数据", use_container_width=True,
+                         disabled=(not FOOTBALL_DATA_API_TOKEN)):
+                with st.spinner(f"正在获取过去 {seasons_back} 个赛季数据，可能需要几分钟..."):
+                    try:
+                        stats = fetch_historical_data(seasons_back=int(seasons_back))
+                        st.success(
+                            f"获取完成！联赛: {stats['leagues']}, "
+                            f"新球队: {stats['teams']}, 新比赛: {stats['matches']}"
+                        )
+                        if stats["errors"]:
+                            for err in stats["errors"]:
+                                st.warning(err)
+                    except Exception as e:
+                        st.error(f"获取失败: {e}")
+
+            st.markdown("---")
+            st.markdown("### football-data.org API说明")
+            st.markdown("""
+            - **数据源**: football-data.org（欧洲足球数据权威来源）
+            - **优势**: 支持历史赛季查询，数据完整准确
+            - **覆盖**: 英超、西甲、德甲、意甲、法甲等10+联赛
+            - **限制**: 免费版每分钟10次请求
+            - **推荐**: 先获取历史数据（3个赛季），再定期获取当前赛季数据
+            """)
+
         else:
-            st.error("API密钥未配置，请在 .env 文件中设置 JUHE_API_KEY")
+            # 聚合数据源
+            from app.config import JUHE_API_KEY
+            if JUHE_API_KEY:
+                st.success("API密钥已配置")
+            else:
+                st.error("API密钥未配置，请在 .env 文件中设置 JUHE_API_KEY")
 
-        # 选择要刷新的联赛
-        st.markdown("### 选择刷新范围")
-        refresh_options = {
-            "全部联赛": list(league_options.keys()),
-            "仅五大联赛": ["英超", "西甲", "德甲", "意甲", "法甲"],
-        }
-        refresh_scope = st.radio("刷新范围", list(refresh_options.keys()), key="refresh_scope")
+            st.markdown("### 选择刷新范围")
+            refresh_options = {
+                "全部联赛": list(league_options.keys()),
+                "仅五大联赛": ["英超", "西甲", "德甲", "意甲", "法甲"],
+            }
+            refresh_scope = st.radio("刷新范围", list(refresh_options.keys()), key="refresh_scope")
 
-        # 显示将要刷新的联赛
-        target_leagues = refresh_options[refresh_scope]
-        st.markdown(f"将刷新以下联赛: {', '.join(target_leagues)}")
+            target_leagues = refresh_options[refresh_scope]
+            st.markdown(f"将刷新以下联赛: {', '.join(target_leagues)}")
 
-        if st.button("🔄 开始刷新", type="primary", use_container_width=True, disabled=(not JUHE_API_KEY)):
-            with st.spinner("正在从API获取数据，请稍候..."):
-                try:
-                    fetch_external_data()
-                    st.success("数据刷新完成！")
-                except Exception as e:
-                    st.error(f"刷新失败: {e}")
+            if st.button("🔄 开始刷新", type="primary",
+                         use_container_width=True, disabled=(not JUHE_API_KEY)):
+                with st.spinner("正在从API获取数据，请稍候..."):
+                    try:
+                        fetch_external_data()
+                        st.success("数据刷新完成！")
+                    except Exception as e:
+                        st.error(f"刷新失败: {e}")
 
-        # API说明
-        st.markdown("---")
-        st.markdown("### API说明")
-        st.markdown("""
-        - **接口提供商**: 聚合数据（Juhe）
-        - **接口1**: 联赛积分榜 - 获取各联赛当前赛季的球队排名和积分
-        - **接口2**: 近期赛程 - 获取各联赛近期已完赛和未开赛的比赛
-        - **限制**: 每日请求次数有限，请合理使用
-        - **注意**: API只提供近期数据，历史数据需要手动录入
-        """)
+            st.markdown("---")
+            st.markdown("### 聚合数据API说明")
+            st.markdown("""
+            - **接口提供商**: 聚合数据（Juhe）
+            - **接口1**: 联赛积分榜 - 获取各联赛当前赛季的球队排名和积分
+            - **接口2**: 近期赛程 - 获取各联赛近期已完赛和未开赛的比赛
+            - **限制**: 每日请求次数有限，请合理使用
+            - **注意**: API只提供近期数据，历史数据需要手动录入
+            """)
 
     with tab4:
         """数据概览"""

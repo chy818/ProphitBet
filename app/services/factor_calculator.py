@@ -424,6 +424,7 @@ def _calc_league_standings(conn: sqlite3.Connection, league_id: int,
                 standings[team_id] = {
                     "team_id": team_id, "points": 0, "goals_for": 0,
                     "goals_against": 0, "played": 0, "wins": 0,
+                    "draws": 0, "losses": 0,
                 }
 
         # 主队统计
@@ -435,6 +436,9 @@ def _calc_league_standings(conn: sqlite3.Connection, league_id: int,
             standings[home_id]["wins"] += 1
         elif home_goals == away_goals:
             standings[home_id]["points"] += 1
+            standings[home_id]["draws"] += 1
+        else:
+            standings[home_id]["losses"] += 1
 
         # 客队统计
         standings[away_id]["played"] += 1
@@ -445,6 +449,9 @@ def _calc_league_standings(conn: sqlite3.Connection, league_id: int,
             standings[away_id]["wins"] += 1
         elif away_goals == home_goals:
             standings[away_id]["points"] += 1
+            standings[away_id]["draws"] += 1
+        else:
+            standings[away_id]["losses"] += 1
 
     result = sorted(standings.values(), key=lambda x: (x["points"], x["goals_for"] - x["goals_against"]), reverse=True)
     for rank, team in enumerate(result, 1):
