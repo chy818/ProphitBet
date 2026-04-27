@@ -351,3 +351,19 @@ def get_all_leagues(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM leagues ORDER BY league_id")
     return [dict(row) for row in cursor.fetchall()]
+
+
+def get_league_id_by_name(conn: sqlite3.Connection, league_name: str) -> Optional[int]:
+    """根据联赛名称获取联赛ID"""
+    cursor = conn.cursor()
+    cursor.execute("SELECT league_id FROM leagues WHERE league_name = ?", (league_name,))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def get_team_id_by_name(conn: sqlite3.Connection, team_name: str) -> Optional[int]:
+    """根据球队名称获取球队ID"""
+    cursor = conn.cursor()
+    cursor.execute("SELECT team_id FROM teams WHERE team_name = ?", (team_name,))
+    row = cursor.fetchone()
+    return row[0] if row else None

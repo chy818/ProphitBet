@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 from app.database import init_database
-from app.services.data_collector import generate_sample_data
+from app.services.data_collector import generate_sample_data, fetch_external_data
 from app.ml.win_loss_model import train_and_save_all_models
 from app.ml.goals_model import train_and_save_goals_models
 
@@ -56,7 +56,12 @@ st.markdown("""
 
 
 def ensure_data_initialized():
-    """确保数据库已初始化并有数据"""
+    """确保数据库已初始化并有数据
+
+    数据初始化流程：
+    1. 先加载模拟历史数据（过去3个赛季，用于模型训练）
+    2. 再从API获取当前赛季的实时数据（真实比赛结果）
+    """
     if "data_initialized" not in st.session_state:
         init_database()
         st.session_state.data_initialized = True
@@ -69,8 +74,15 @@ def ensure_data_initialized():
             cursor.execute("SELECT COUNT(*) as cnt FROM teams")
             row = cursor.fetchone()
             if row["cnt"] == 0:
-                with st.spinner("正在生成示例数据，请稍候..."):
+                # 第一步：加载模拟历史数据（过去3个赛季）
+                with st.spinner("正在加载历史数据，请稍候..."):
                     generate_sample_data(seasons=3)
+                # 第二步：从API获取当前赛季实时数据
+                with st.spinner("正在获取实时数据..."):
+                    try:
+                        fetch_external_data()
+                    except Exception as e:
+                        st.warning(f"获取实时数据失败: {e}，将使用模拟数据")
                 st.session_state.sample_data_loaded = True
             else:
                 st.session_state.sample_data_loaded = True
