@@ -1,4 +1,4 @@
-"""数据管理页面 - 手动录入比赛、球队数据，API数据刷新"""
+"""数据管理页面 - 手动录入比赛、球队数据，API数据刷新，因子调整"""
 import sys
 import os
 
@@ -6,18 +6,26 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import streamlit as st
 import pandas as pd
+from datetime import date
 
 from app.database import get_connection, get_all_teams, get_all_leagues, get_db
+from app.database import (insert_factor_adjustment, get_active_factor_adjustments,
+                          get_all_factor_adjustments, update_factor_adjustment,
+                          deactivate_factor_adjustment, delete_factor_adjustment)
 from app.services.data_collector import fetch_external_data
 from app.services.football_data_collector import fetch_football_data, fetch_historical_data
+from app.services.factor_calculator import (FACTOR_NAMES, FACTOR_CATEGORIES,
+                                            ADJUSTABLE_FACTORS, calculate_all_factors)
 
 st.set_page_config(page_title="数据管理", page_icon="⚙️", layout="wide")
 
 st.title("⚙️ 数据管理")
-st.markdown("手动录入比赛数据、管理球队信息、刷新API数据")
+st.markdown("手动录入比赛数据、管理球队信息、刷新API数据、手动调整因子")
 
 # 标签页
-tab1, tab2, tab3, tab4 = st.tabs(["⚽ 录入比赛", "🏟️ 管理球队", "🔄 API数据刷新", "📊 数据概览"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["⚽ 录入比赛", "🏟️ 管理球队", "🔄 API数据刷新", "📊 数据概览", "🎯 因子调整"]
+)
 
 conn = get_connection()
 
@@ -332,6 +340,337 @@ try:
             df_season = pd.DataFrame([dict(r) for r in season_stats])
             df_season.columns = ["赛季", "比赛数"]
             st.dataframe(df_season, use_container_width=True, hide_index=True)
+
+        # 因子调整统计
+        st.markdown("### 因子调整统计")
+        cursor.execute("SELECT COUNT(*) as cnt FROM factor_adjustments WHERE is_active = 1")
+        active_adjustments = cursor.fetchone()["cnt"]
+        cursor.execute("SELECT COUNT(*) as cnt FROM factor_adjustments")
+        total_adjustments = cursor.fetchone()["cnt"]
+        col5, col6 = st.columns(2)
+        col5.metric("生效中的调整", active_adjustments)
+        col6.metric("总调整记录", total_adjustments)
+
+    with tab5:
+        """因子手动调整"""
+        st.subheader("🎯 因子手动调整")
+        st.markdown("""
+        > **说明**：手动调整因子值可以覆盖系统计算的结果。
+        > 支持设置生效时间范围，可用于模拟球员缺阵、战术调整等场景。
+        > 调整后的因子会影响后续的预测结果。
+        """)
+
+        # 子标签页：添加调整 / 查看调整 / 管理调整 / 因子说明 / 球队因子值
+        adj_tab1, adj_tab2, adj_tab3, adj_tab4, adj_tab5 = st.tabs(
+            ["➕ 添加调整", "📋 当前生效", "🗂️ 全部记录", "📖 因子说明", "📊 球队因子值"]
+        )
+
+        with adj_tab1:
+            """添加新的因子调整"""
+            st.markdown("#### 选择球队")
+            leagues_for_adj = get_all_leagues(conn)
+            league_options_for_adj = {lg["league_name"]: lg["league_id"] for lg in leagues_for_adj}
+            selected_league_for_adj = st.selectbox("选择联赛", list(league_options_for_adj.keys()),
+                                                   key="adj_league_select")
+            selected_league_id_for_adj = league_options_for_adj[selected_league_for_adj]
+
+            teams_for_adj = get_all_teams(conn, selected_league_id_for_adj)
+            if not teams_for_adj:
+                st.warning("该联赛暂无球队数据")
+            else:
+                team_options_for_adj = {t["team_name"]: t["team_id"] for t in teams_for_adj}
+                selected_team_name_for_adj = st.selectbox("选择球队", list(team_options_for_adj.keys()),
+                                                          key="adj_team_select")
+                selected_team_id_for_adj = team_options_for_adj[selected_team_name_for_adj]
+
+                st.markdown("#### 选择参考对手（用于计算原始因子值）")
+                opponent_options = {k: v for k, v in team_options_for_adj.items() if v != selected_team_id_for_adj}
+                if opponent_options:
+                    default_opponent = list(opponent_options.keys())[0]
+                    selected_opponent_name = st.selectbox("选择对手球队", list(opponent_options.keys()),
+                                                         index=list(opponent_options.keys()).index(default_opponent) if default_opponent in opponent_options else 0,
+                                                         key="adj_opponent_select")
+                    selected_opponent_id_for_adj = opponent_options[selected_opponent_name]
+
+                    st.markdown("#### 选择要调整的因子")
+                    category_options = ["全部"] + list(set(FACTOR_CATEGORIES.values()))
+                    selected_category = st.selectbox("按分类筛选", category_options, key="adj_category_select")
+
+                    available_factors = []
+                    for factor in ADJUSTABLE_FACTORS:
+                        cat = FACTOR_CATEGORIES.get(factor, "其他")
+                        if selected_category == "全部" or cat == selected_category:
+                            display_name = FACTOR_NAMES.get(factor, factor)
+                            available_factors.append((factor, f"[{cat}] {display_name}"))
+
+                    factor_options = {k: v for k, v in available_factors}
+                    selected_factor = st.selectbox("选择因子", list(factor_options.keys()),
+                                                  format_func=lambda x: factor_options[x],
+                                                  key="adj_factor_select")
+
+                    st.markdown("#### 设置调整值")
+
+                    with get_db() as db_conn:
+                        factors = calculate_all_factors(
+                            db_conn, selected_team_id_for_adj, selected_opponent_id_for_adj,
+                            selected_league_id_for_adj, "2025-2026", None
+                        )
+                        home_factor_key = f"home_{selected_factor}"
+                        original_value = factors.get(home_factor_key, 0.0) if home_factor_key in factors else 0.0
+
+                    col_adj1, col_adj2 = st.columns(2)
+                    with col_adj1:
+                        st.number_input("原始值（参考）", value=float(original_value), format="%.3f",
+                                        key="adj_original_value", disabled=True)
+                        adjusted_value = st.number_input("调整后的值", value=float(original_value), format="%.3f",
+                                                         key="adj_adjusted_value")
+
+                    with col_adj2:
+                        reason = st.text_area("调整原因", placeholder="例如：核心前锋伤缺，进攻能力下降",
+                                              key="adj_reason")
+                        effective_from = st.date_input("生效日期（留空则立即生效）",
+                                                        value=None, key="adj_effective_from")
+                        effective_to = st.date_input("失效日期（留空则永久生效）",
+                                                      value=None, key="adj_effective_to")
+
+                    if st.button("✅ 添加调整", type="primary", use_container_width=True):
+                        try:
+                            with get_db() as db_conn:
+                                insert_factor_adjustment(
+                                    db_conn,
+                                    team_id=selected_team_id_for_adj,
+                                    factor_name=selected_factor,
+                                    factor_category=FACTOR_CATEGORIES.get(selected_factor, "其他"),
+                                    adjusted_value=adjusted_value,
+                                    original_value=original_value,
+                                    reason=reason if reason else None,
+                                    effective_from=str(effective_from) if effective_from else None,
+                                    effective_to=str(effective_to) if effective_to else None
+                                )
+                            st.success(f"添加成功！球队「{selected_team_name_for_adj}」的「{FACTOR_NAMES.get(selected_factor, selected_factor)}」已调整为 {adjusted_value}")
+                        except Exception as e:
+                            st.error(f"添加失败: {e}")
+                else:
+                    st.warning("该联赛至少需要2支球队才能计算因子")
+
+        with adj_tab2:
+            """查看当前生效的因子调整"""
+            st.markdown("#### 当前生效的因子调整")
+            active_adjustments = get_active_factor_adjustments(conn)
+
+            if active_adjustments:
+                df_active = pd.DataFrame(active_adjustments)
+                display_cols = ["team_name", "factor_category", "factor_name",
+                                "adjusted_value", "original_value", "reason",
+                                "effective_from", "effective_to"]
+                df_display = df_active[display_cols].copy()
+                df_display.columns = ["球队", "分类", "因子", "调整值", "原始值", "原因",
+                                      "生效日期", "失效日期"]
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+                st.markdown("#### 停用调整")
+                adj_to_deactivate = st.selectbox(
+                    "选择要停用的调整",
+                    [(a["adjustment_id"], f"{a['team_name']} - {FACTOR_NAMES.get(a['factor_name'], a['factor_name'])}")
+                     for a in active_adjustments],
+                    format_func=lambda x: x[1],
+                    key="deactivate_select"
+                )
+                if st.button("⛔ 停用选中调整", use_container_width=True):
+                    try:
+                        with get_db() as db_conn:
+                            deactivate_factor_adjustment(db_conn, adj_to_deactivate[0])
+                        st.success("停用成功！")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"停用失败: {e}")
+            else:
+                st.info("暂无生效中的因子调整")
+
+        with adj_tab3:
+            """查看全部调整记录"""
+            st.markdown("#### 全部调整记录")
+            all_adjustments = get_all_factor_adjustments(conn)
+
+            if all_adjustments:
+                df_all = pd.DataFrame(all_adjustments)
+                display_cols = ["team_name", "factor_category", "factor_name",
+                                "adjusted_value", "original_value", "reason",
+                                "is_active", "effective_from", "effective_to", "created_at"]
+                df_display = df_all[display_cols].copy()
+                df_display.columns = ["球队", "分类", "因子", "调整值", "原始值", "原因",
+                                      "是否生效", "生效日期", "失效日期", "创建时间"]
+                df_display["是否生效"] = df_display["是否生效"].apply(lambda x: "是" if x else "否")
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+                st.markdown("#### 删除调整记录")
+                adj_to_delete = st.selectbox(
+                    "选择要删除的调整",
+                    [(a["adjustment_id"], f"{a['team_name']} - {FACTOR_NAMES.get(a['factor_name'], a['factor_name'])}")
+                     for a in all_adjustments],
+                    format_func=lambda x: x[1],
+                    key="delete_select"
+                )
+                col_del1, col_del2 = st.columns(2)
+                with col_del1:
+                    if st.button("🗑️ 删除选中记录", use_container_width=True):
+                        try:
+                            with get_db() as db_conn:
+                                delete_factor_adjustment(db_conn, adj_to_delete[0])
+                            st.success("删除成功！")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"删除失败: {e}")
+                with col_del2:
+                    if st.button("⛔ 停用选中记录", use_container_width=True):
+                        try:
+                            with get_db() as db_conn:
+                                deactivate_factor_adjustment(db_conn, adj_to_delete[0])
+                            st.success("停用成功！")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"停用失败: {e}")
+            else:
+                st.info("暂无调整记录")
+
+        with adj_tab4:
+            """因子说明文档"""
+            st.markdown("#### 📖 因子计算原理说明")
+
+            from app.services.factor_calculator import FACTOR_PRINCIPLES
+
+            category_order = ["进攻端", "防守端", "交互", "状态趋势", "交锋历史",
+                            "赛程情景", "稳定性", "实力", "统治力", "对阵档位",
+                            "战意", "球员缺阵", "疲劳"]
+
+            for category in category_order:
+                factors_in_category = [
+                    (name, info) for name, info in FACTOR_PRINCIPLES.items()
+                    if info["category"] == category
+                ]
+                if factors_in_category:
+                    with st.expander(f"**{category}**（{len(factors_in_category)}个因子）", expanded=False):
+                        for factor_name, info in factors_in_category:
+                            display_name = FACTOR_NAMES.get(factor_name, factor_name)
+                            st.markdown(f"""
+                            ---
+                            ### {display_name}
+                            - **因子名称**: `{factor_name}`
+                            - **数据来源**: {info['data_source']}
+                            - **计算方式**: {info['calculation']}
+                            - **计算公式**: `{info['formula']}`
+                            - **权重因子**: {info['weight_factor']}
+                            - **计算示例**: {info['example']}
+                            """)
+
+            st.markdown("---")
+            st.markdown("""
+            ### 📊 数据完整性说明
+
+            | 数据类型 | 数据来源 | 可靠性 |
+            |---------|---------|--------|
+            | 比赛结果（进球数） | football-data.org | ✅ 真实 |
+            | 比赛日期 | football-data.org | ✅ 真实 |
+            | 预期进球(xG)等统计 | 模拟生成 | ⚠️ 基于球队实力的估算 |
+            | 射门、关键传球等 | 模拟生成 | ⚠️ 基于球队实力的估算 |
+            | 交锋历史 | football-data.org | ✅ 真实（但受样本量影响） |
+            | 休息天数、赛程 | 基于比赛日期计算 | ✅ 真实 |
+            | 积分榜排名 | football-data.org | ✅ 真实 |
+            """)
+
+        with adj_tab5:
+            """球队因子值展示"""
+            st.markdown("#### 📊 球队因子值查询")
+            st.markdown("""
+            > **说明**：选择球队和参考对手后，系统会计算并展示该球队的所有因子值。
+            > 因子值基于球队近期比赛统计数据计算得出。
+            """)
+
+            # 选择联赛
+            st.markdown("##### 选择联赛和球队")
+            leagues_for_factors = get_all_leagues(conn)
+            league_options_for_factors = {lg["league_name"]: lg["league_id"] for lg in leagues_for_factors}
+            selected_league_for_factors = st.selectbox("选择联赛", list(league_options_for_factors.keys()),
+                                                       key="factors_league_select")
+            selected_league_id_for_factors = league_options_for_factors[selected_league_for_factors]
+
+            # 选择球队
+            teams_for_factors = get_all_teams(conn, selected_league_id_for_factors)
+            if not teams_for_factors:
+                st.warning("该联赛暂无球队数据")
+            else:
+                team_options_for_factors = {t["team_name"]: t["team_id"] for t in teams_for_factors}
+                col_f1, col_f2 = st.columns(2)
+                with col_f1:
+                    selected_team_for_factors = st.selectbox("选择球队", list(team_options_for_factors.keys()),
+                                                             key="factors_team_select")
+                    selected_team_id_for_factors = team_options_for_factors[selected_team_for_factors]
+
+                with col_f2:
+                    opponent_options_for_factors = {k: v for k, v in team_options_for_factors.items()
+                                                    if v != selected_team_id_for_factors}
+                    if opponent_options_for_factors:
+                        selected_opponent_for_factors = st.selectbox("选择参考对手",
+                                                                     list(opponent_options_for_factors.keys()),
+                                                                     key="factors_opponent_select")
+                        selected_opponent_id_for_factors = opponent_options_for_factors[selected_opponent_for_factors]
+                    else:
+                        st.warning("该联赛至少需要2支球队才能计算因子")
+                        selected_opponent_id_for_factors = None
+
+                if selected_opponent_id_for_factors and st.button("🔍 计算因子值", type="primary"):
+                    with st.spinner("正在计算因子值..."):
+                        with get_db() as db_conn:
+                            factors = calculate_all_factors(
+                                db_conn, selected_team_id_for_factors, selected_opponent_id_for_factors,
+                                selected_league_id_for_factors, "2025-2026", None
+                            )
+
+                    # 按分类整理因子值
+                    st.markdown(f"##### {selected_team_for_factors} vs {selected_opponent_for_factors} 因子值")
+
+                    category_data = {}
+                    for key, value in factors.items():
+                        if key.startswith("home_"):
+                            factor_name = key.replace("home_", "")
+                            category = FACTOR_CATEGORIES.get(factor_name, "其他")
+                            if category not in category_data:
+                                category_data[category] = []
+                            display_name = FACTOR_NAMES.get(factor_name, factor_name)
+                            category_data[category].append({
+                                "因子": display_name,
+                                "英文名": factor_name,
+                                "值": round(value, 4) if isinstance(value, float) else value
+                            })
+
+                    # 按分类展示
+                    category_order = ["进攻端", "防守端", "交互", "状态趋势", "交锋历史",
+                                    "赛程情景", "稳定性", "实力", "统治力", "对阵档位",
+                                    "战意", "球员缺阵", "疲劳"]
+
+                    for category in category_order:
+                        if category in category_data and category_data[category]:
+                            with st.expander(f"**{category}**", expanded=(category in ["进攻端", "防守端"])):
+                                df = pd.DataFrame(category_data[category])
+                                st.dataframe(df, use_container_width=True, hide_index=True)
+
+                    # 导出功能
+                    st.markdown("---")
+                    st.markdown("##### 导出因子值")
+                    all_factors_df = pd.DataFrame([
+                        {"分类": FACTOR_CATEGORIES.get(k.replace("home_", ""), "其他"),
+                         "因子": FACTOR_NAMES.get(k.replace("home_", ""), k),
+                         "英文名": k.replace("home_", ""),
+                         "值": round(v, 4) if isinstance(v, float) else v}
+                        for k, v in factors.items() if k.startswith("home_")
+                    ])
+                    csv = all_factors_df.to_csv(index=False).encode('utf-8-sig')
+                    st.download_button(
+                        label="📥 导出CSV",
+                        data=csv,
+                        file_name=f"{selected_team_for_factors}_factors.csv",
+                        mime="text/csv"
+                    )
 
 finally:
     conn.close()

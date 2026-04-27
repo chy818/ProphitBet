@@ -137,6 +137,25 @@ def init_database():
             )
         """)
 
+        # 创建因子调整表（用于手动覆盖因子值）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS factor_adjustments (
+                adjustment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL,
+                factor_name VARCHAR(100) NOT NULL,
+                factor_category VARCHAR(50) NOT NULL,
+                adjusted_value FLOAT NOT NULL,
+                original_value FLOAT,
+                reason TEXT,
+                effective_from DATE DEFAULT (date('now')),
+                effective_to DATE,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (team_id) REFERENCES teams(team_id)
+            )
+        """)
+
         # 创建索引以提升查询性能
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_home_team ON matches(home_team_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_away_team ON matches(away_team_id)")
@@ -146,6 +165,10 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_factors_match ON factors(match_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_factors_type ON factors(factor_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_match ON predictions(match_id)")
+
+        # 因子调整表索引
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_factor_adjustments_team ON factor_adjustments(team_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_factor_adjustments_active ON factor_adjustments(is_active)")
 
         conn.commit()
 
@@ -298,6 +321,112 @@ def get_factors_by_match(conn: sqlite3.Connection, match_id: int) -> List[Dict[s
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM factors WHERE match_id = ?", (match_id,))
     return [dict(row) for row in cursor.fetchall()]
+
+
+# ==================== 因子调整 CRUD ====================
+
+def insert_factor_adjustment(conn: sqlite3.Connection, team_id: int,
+                              factor_name: str, factor_category: str,
+                              adjusted_value: float, original_value: Optional[float] = None,
+                              reason: Optional[str] = None,
+                              effective_from: Optional[str] = None,
+                              effective_to: Optional[str] = None) -> int:
+    """插入因子调整记录"""
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO factor_adjustments
+           (team_id, factor_name, factor_category, adjusted_value, original_value,
+            reason, effective_from, effective_to)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (team_id, factor_name, factor_category, adjusted_value, original_value,
+         reason, effective_from, effective_to)
+    )
+    return cursor.lastrowid
+
+
+def get_active_factor_adjustments(conn: sqlite3.Connection,
+                                   team_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """获取当前生效的因子调整，可按球队筛选"""
+    cursor = conn.cursor()
+    if team_id:
+        cursor.execute(
+            """SELECT fa.*, t.team_name
+               FROM factor_adjustments fa
+               JOIN teams t ON fa.team_id = t.team_id
+               WHERE fa.is_active = 1
+               AND (fa.effective_from IS NULL OR fa.effective_from <= date('now'))
+               AND (fa.effective_to IS NULL OR fa.effective_to >= date('now'))
+               AND fa.team_id = ?
+               ORDER BY fa.factor_category, fa.factor_name""",
+            (team_id,)
+        )
+    else:
+        cursor.execute(
+            """SELECT fa.*, t.team_name
+               FROM factor_adjustments fa
+               JOIN teams t ON fa.team_id = t.team_id
+               WHERE fa.is_active = 1
+               AND (fa.effective_from IS NULL OR fa.effective_from <= date('now'))
+               AND (fa.effective_to IS NULL OR fa.effective_to >= date('now'))
+               ORDER BY t.team_name, fa.factor_category, fa.factor_name"""
+        )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_all_factor_adjustments(conn: sqlite3.Connection,
+                                 team_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """获取所有因子调整记录（包括已失效的）"""
+    cursor = conn.cursor()
+    if team_id:
+        cursor.execute(
+            """SELECT fa.*, t.team_name
+               FROM factor_adjustments fa
+               JOIN teams t ON fa.team_id = t.team_id
+               WHERE fa.team_id = ?
+               ORDER BY fa.created_at DESC""",
+            (team_id,)
+        )
+    else:
+        cursor.execute(
+            """SELECT fa.*, t.team_name
+               FROM factor_adjustments fa
+               JOIN teams t ON fa.team_id = t.team_id
+               ORDER BY fa.created_at DESC"""
+        )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def update_factor_adjustment(conn: sqlite3.Connection, adjustment_id: int,
+                               adjusted_value: float, reason: Optional[str] = None) -> bool:
+    """更新因子调整值"""
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE factor_adjustments
+           SET adjusted_value = ?, reason = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE adjustment_id = ?""",
+        (adjusted_value, reason, adjustment_id)
+    )
+    return cursor.rowcount > 0
+
+
+def deactivate_factor_adjustment(conn: sqlite3.Connection, adjustment_id: int) -> bool:
+    """停用因子调整"""
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE factor_adjustments
+           SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+           WHERE adjustment_id = ?""",
+        (adjustment_id,)
+    )
+    return cursor.rowcount > 0
+
+
+def delete_factor_adjustment(conn: sqlite3.Connection, adjustment_id: int) -> bool:
+    """删除因子调整记录"""
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM factor_adjustments WHERE adjustment_id = ?",
+                   (adjustment_id,))
+    return cursor.rowcount > 0
 
 
 # ==================== 预测结果 CRUD ====================

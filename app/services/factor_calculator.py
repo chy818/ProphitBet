@@ -89,6 +89,518 @@ FACTOR_DESCRIPTIONS = {
     "fatigue_index": "0-1的疲劳度因子，越高表示越疲劳",
 }
 
+# 因子计算原理（详细说明每个因子是如何计算的）
+FACTOR_PRINCIPLES = {
+    # ========== 进攻端因子 ==========
+    "avg_expected_goals": {
+        "category": "进攻端",
+        "data_source": "match_stats.expected_goals",
+        "calculation": "取该球队最近N场主场比赛的预期进球(xG)平均值",
+        "formula": "avg_expected_goals = sum(xG) / N",
+        "weight_factor": "比赛越近权重越高（指数衰减）",
+        "example": "球队近5场xG分别为1.2, 0.8, 1.5, 0.9, 1.1 → 平均值=1.1",
+    },
+    "avg_shots_on_target": {
+        "category": "进攻端",
+        "data_source": "match_stats.shots_on_target",
+        "calculation": "取该球队最近N场比赛的射正次数平均值",
+        "formula": "avg_shots_on_target = sum(shots_on_target) / N",
+        "weight_factor": "比赛越近权重越高（指数衰减）",
+        "example": "球队近5场射正次数分别为5, 3, 6, 4, 2 → 平均值=4.0",
+    },
+    "avg_key_passes": {
+        "category": "进攻端",
+        "data_source": "match_stats.key_passes",
+        "calculation": "取该球队最近N场比赛的关键传球次数平均值",
+        "formula": "avg_key_passes = sum(key_passes) / N",
+        "weight_factor": "比赛越近权重越高（指数衰减）",
+        "example": "球队近5场关键传球分别为12, 8, 15, 10, 9 → 平均值=10.8",
+    },
+
+    # ========== 防守端因子 ==========
+    "avg_expected_goals_conceded": {
+        "category": "防守端",
+        "data_source": "match_stats.expected_goals_conceded",
+        "calculation": "取该球队最近N场比赛的对手预期进球(xG)平均值",
+        "formula": "avg_xGc = sum(对手xG) / N",
+        "weight_factor": "比赛越近权重越高（指数衰减）",
+        "example": "对手xG分别为0.5, 1.2, 0.8, 0.6, 1.0 → 平均值=0.82",
+    },
+    "avg_shots_on_target_conceded": {
+        "category": "防守端",
+        "data_source": "match_stats.shots_on_target_conceded",
+        "calculation": "取该球队最近N场比赛被射正次数的平均值",
+        "formula": "avg_sot_conceded = sum(被射正) / N",
+        "weight_factor": "比赛越近权重越高（指数衰减）",
+        "example": "被射正次数分别为3, 5, 2, 4, 6 → 平均值=4.0",
+    },
+    "avg_pressing_intensity": {
+        "category": "防守端",
+        "data_source": "match_stats.pressing_intensity",
+        "calculation": "取该球队最近N场比赛的压迫强度平均值",
+        "formula": "avg_pressing = sum(pressing_intensity) / N",
+        "weight_factor": "比赛越近权重越高（指数衰减）",
+        "example": "压迫强度分别为180, 160, 200, 170, 190 → 平均值=180",
+    },
+
+    # ========== 交互因子 ==========
+    "attack_defense_ratio": {
+        "category": "交互",
+        "data_source": "主队avg_expected_goals / 客队avg_expected_goals_conceded",
+        "calculation": "主队进攻能力与客队防守能力的比值",
+        "formula": "attack_defense_ratio = home_xG / away_xGc",
+        "weight_factor": "无",
+        "example": "主队xG=1.5, 客队xGc=0.8 → 比值=1.875",
+    },
+    "defense_attack_ratio": {
+        "category": "交互",
+        "data_source": "主队avg_expected_goals_conceded / 客队avg_expected_goals",
+        "calculation": "主队防守能力与客队进攻能力的比值",
+        "formula": "defense_attack_ratio = home_xGc / away_xG",
+        "weight_factor": "无",
+        "example": "主队xGc=0.6, 客队xG=1.2 → 比值=0.5",
+    },
+    "xg_balance": {
+        "category": "交互",
+        "data_source": "主队xG - 客队xG",
+        "calculation": "主客队预期进球差值",
+        "formula": "xg_balance = home_xG - away_xG",
+        "weight_factor": "无",
+        "example": "主队xG=1.5, 客队xG=1.1 → 差值=0.4",
+    },
+
+    # ========== 状态趋势因子 ==========
+    "weighted_recent_xg": {
+        "category": "状态趋势",
+        "data_source": "match_stats.expected_goals（加权）",
+        "calculation": "近期xG的加权平均，越近的比赛权重越高",
+        "formula": "weighted_xG = Σ(xG[i] × λ^i) / Σ(λ^i)，λ<1为衰减因子",
+        "weight_factor": "指数衰减，离现在每多1场权重乘以λ",
+        "example": "λ=0.8时，第1场权重0.8，第2场权重0.64，第3场权重0.512...",
+    },
+    "weighted_recent_xgc": {
+        "category": "状态趋势",
+        "data_source": "match_stats.expected_goals_conceded（加权）",
+        "calculation": "近期xGc的加权平均，越近的比赛权重越高",
+        "formula": "weighted_xGc = Σ(xGc[i] × λ^i) / Σ(λ^i)",
+        "weight_factor": "指数衰减",
+        "example": "同weighted_recent_xg的计算方式",
+    },
+    "actual_vs_expected_points": {
+        "category": "状态趋势",
+        "data_source": "实际积分 - 预期积分",
+        "calculation": "实际积分与基于xG计算的预期积分的差值",
+        "formula": "差值 = 实际积分 - Σ(xG/场均xG×3)",
+        "weight_factor": "无",
+        "example": "实际10分，预期12分 → 差值=-2（表现低于预期）",
+    },
+    "form_rating": {
+        "category": "状态趋势",
+        "data_source": "近5场比赛结果",
+        "calculation": "根据近5场胜平负计算状态评分",
+        "formula": "评分 = 胜×3 + 平×1（满分15）",
+        "weight_factor": "越近的比赛权重越高",
+        "example": "近5场：胜胜负平胜 → 3+3+0+1+3=10分",
+    },
+    "recent_win_rate": {
+        "category": "状态趋势",
+        "data_source": "近N场胜率",
+        "calculation": "近N场比赛的胜率",
+        "formula": "win_rate = 胜场数 / 总场数",
+        "weight_factor": "无",
+        "example": "10场6胜 → 胜率=60%",
+    },
+    "momentum_score": {
+        "category": "状态趋势",
+        "data_source": "近N场积分变化趋势",
+        "calculation": "基于最近几场积分的线性回归斜率",
+        "formula": "斜率 > 0表示上升趋势，< 0表示下降趋势",
+        "weight_factor": "无",
+        "example": "近5场积分：6,3,6,9,6 → 斜率接近0，状态平稳",
+    },
+    "home_form": {
+        "category": "状态趋势",
+        "data_source": "主队近N场主场比赛结果",
+        "calculation": "主场作战时的状态评分",
+        "formula": "同form_rating，但仅统计主场比赛",
+        "weight_factor": "比赛越近权重越高",
+        "example": "主场3胜1平1负 → 10分",
+    },
+    "away_form": {
+        "category": "状态趋势",
+        "data_source": "客队近N场客场比赛结果",
+        "calculation": "客场作战时的状态评分",
+        "formula": "同form_rating，但仅统计客场比赛",
+        "weight_factor": "比赛越近权重越高",
+        "example": "客场2胜2平1负 → 8分",
+    },
+
+    # ========== 交锋历史因子 ==========
+    "h2h_win_rate": {
+        "category": "交锋历史",
+        "data_source": "两队历史交锋记录（近K场）",
+        "calculation": "主队在这K场交锋中的胜率",
+        "formula": "h2h_win_rate = 主队胜场 / K",
+        "weight_factor": "无",
+        "example": "近10场交锋主队4胜3平3负 → 胜率=40%",
+    },
+    "h2h_avg_goals": {
+        "category": "交锋历史",
+        "data_source": "两队历史交锋总进球",
+        "calculation": "近K场交锋的场均总进球数",
+        "formula": "h2h_avg_goals = 总进球 / K",
+        "weight_factor": "无",
+        "example": "近5场总进球15个 → 场均3.0球",
+    },
+    "h2h_avg_conceded": {
+        "category": "交锋历史",
+        "data_source": "两队历史交锋主队失球",
+        "calculation": "近K场交锋中主队场均失球数",
+        "formula": "h2h_avg_conceded = 主队总失球 / K",
+        "weight_factor": "无",
+        "example": "近5场失球6个 → 场均1.2球",
+    },
+    "h2h_recent_form": {
+        "category": "交锋历史",
+        "data_source": "两队近3场交锋结果",
+        "calculation": "仅统计近3场交锋的状态",
+        "formula": "同form_rating，但仅统计近3场交锋",
+        "weight_factor": "无",
+        "example": "近3场：胜负平 → 4分",
+    },
+
+    # ========== 赛程情景因子 ==========
+    "rest_days_diff": {
+        "category": "赛程情景",
+        "data_source": "match.match_date",
+        "calculation": "主队休息天数 - 客队休息天数",
+        "formula": "rest_diff = 主队距上一场天数 - 客队距上一场天数",
+        "weight_factor": "无",
+        "example": "主队休息7天，客队休息3天 → 差值=4天",
+    },
+    "is_home": {
+        "category": "赛程情景",
+        "data_source": "比赛主场标识",
+        "calculation": "主队固定为1，客队固定为0",
+        "formula": "is_home ∈ {0, 1}",
+        "weight_factor": "无",
+        "example": "主队=1，客队=0",
+    },
+    "schedule_density": {
+        "category": "赛程情景",
+        "data_source": "近14天内的比赛场次",
+        "calculation": "统计近14天内该队的比赛场次",
+        "formula": "density = 14天内的比赛数",
+        "weight_factor": "无",
+        "example": "14天内踢了3场 → 密度=3",
+    },
+    "home_advantage": {
+        "category": "赛程情景",
+        "data_source": "基于联赛统计的历史主场胜率",
+        "calculation": "该联赛主场胜率的平均值（约46%）",
+        "formula": "advantage = 联赛主场胜率 - 0.5",
+        "weight_factor": "无",
+        "example": "英超主场胜率约46% → 优势约-0.04",
+    },
+
+    # ========== 稳定性因子 ==========
+    "xg_variance": {
+        "category": "稳定性",
+        "data_source": "match_stats.expected_goals",
+        "calculation": "近期xG的标准差，反映进攻稳定性",
+        "formula": "σ = sqrt(Σ(xG - mean)² / N)",
+        "weight_factor": "无",
+        "example": "xG=[1.5,0.5,1.5,0.5,1.5] → 标准差=0.5（不稳定）",
+    },
+    "xgc_variance": {
+        "category": "稳定性",
+        "data_source": "match_stats.expected_goals_conceded",
+        "calculation": "近期xGc的标准差，反映防守稳定性",
+        "formula": "σ = sqrt(Σ(xGc - mean)² / N)",
+        "weight_factor": "无",
+        "example": "xGc=[0.8,1.2,0.8,1.2,0.8] → 标准差=0.2（较稳定）",
+    },
+    "performance_consistency": {
+        "category": "稳定性",
+        "data_source": "match_stats中的多个指标",
+        "calculation": "1减去各指标变异系数的平均值",
+        "formula": "consistency = 1 - avg(CV)，CV=σ/μ",
+        "weight_factor": "无",
+        "example": "一致性高表示球队表现稳定",
+    },
+    "result_std_dev": {
+        "category": "稳定性",
+        "data_source": "比赛结果（胜=3，平=1，负=0）",
+        "calculation": "近N场积分的标准差",
+        "formula": "σ = sqrt(Σ(points - mean)² / N)",
+        "weight_factor": "无",
+        "example": "积分=[3,0,3,1,3] → 标准差=1.2",
+    },
+    "goals_std_dev": {
+        "category": "稳定性",
+        "data_source": "match_stats.goals",
+        "calculation": "近N场进球数的标准差",
+        "formula": "σ = sqrt(Σ(goals - mean)² / N)",
+        "weight_factor": "无",
+        "example": "进球=[2,0,3,1,2] → 标准差=1.0",
+    },
+
+    # ========== 实力因子 ==========
+    "strength_rating": {
+        "category": "实力",
+        "data_source": "联赛积分榜",
+        "calculation": "基于当前积分和历史表现的综合实力评分",
+        "formula": "rating = (当前积分 + 历史加权积分) / 最大可能积分",
+        "weight_factor": "历史数据权重0.3",
+        "example": "当前24分，历史表现良好 → 评分约0.72",
+    },
+    "league_standing": {
+        "category": "实力",
+        "data_source": "联赛积分榜排名",
+        "calculation": "联赛排名位置",
+        "formula": "standing = 当前排名",
+        "weight_factor": "无",
+        "example": "排名第3 → standing=3",
+    },
+    "relative_strength": {
+        "category": "实力",
+        "data_source": "主客队strength_rating",
+        "calculation": "主队实力 / (主队实力 + 客队实力)",
+        "formula": "relative = home_rating / (home_rating + away_rating)",
+        "weight_factor": "无",
+        "example": "主0.8，客0.6 → 相对实力=0.57",
+    },
+    "ranking_diff": {
+        "category": "实力",
+        "data_source": "联赛积分榜排名差",
+        "calculation": "主队排名 - 客队排名",
+        "formula": "diff = home_rank - away_rank（负数表示主队排名更高）",
+        "weight_factor": "无",
+        "example": "主队第3，客队第5 → 差值=-2",
+    },
+    "historical_ranking_diff": {
+        "category": "实力",
+        "data_source": "历史赛季平均排名",
+        "calculation": "主队历史平均排名 - 客队历史平均排名",
+        "formula": "diff = avg(home_hist_rank) - avg(away_hist_rank)",
+        "weight_factor": "无",
+        "example": "主队平均第4，客队平均第6 → 差值=-2",
+    },
+
+    # ========== 统治力因子 ==========
+    "dominance_index": {
+        "category": "统治力",
+        "data_source": "联赛积分、净胜球、控球率的综合",
+        "calculation": "加权平均：积分权重0.5，净胜球0.3，控球率0.2",
+        "formula": "index = 0.5×pts + 0.3×GD + 0.2×possession",
+        "weight_factor": "无",
+        "example": "积分60，净胜球+15，控球率55% → 综合指数较高",
+    },
+    "possession_dominance": {
+        "category": "统治力",
+        "data_source": "match_stats.possessions或控球率",
+        "calculation": "主队控球率 - 客队控球率",
+        "formula": "dominance = home_possession - away_possession",
+        "weight_factor": "无",
+        "example": "主队55%，客队45% → 优势=10%",
+    },
+    "xG_dominance": {
+        "category": "统治力",
+        "data_source": "主客队avg_expected_goals差值",
+        "calculation": "主队xG - 客队xG（综合考虑攻防）",
+        "formula": "xG_dom = home_xG - away_xG + home_xGc - away_xGc",
+        "weight_factor": "无",
+        "example": "主队xG高0.3，xGc低0.2 → 总优势=0.5",
+    },
+    "goal_difference_diff": {
+        "category": "统治力",
+        "data_source": "联赛净胜球差",
+        "calculation": "主队净胜球 - 客队净胜球",
+        "formula": "GD_diff = home_GD - away_GD",
+        "weight_factor": "无",
+        "example": "主队+20，客队+12 → 差值=+8",
+    },
+    "win_rate_diff": {
+        "category": "统治力",
+        "data_source": "联赛胜率差",
+        "calculation": "主队胜率 - 客队胜率",
+        "formula": "WR_diff = home_wins/home_played - away_wins/away_played",
+        "weight_factor": "无",
+        "example": "主队60%，客队50% → 差值=10%",
+    },
+
+    # ========== 对阵档位因子 ==========
+    "vs_top_tier_win_rate": {
+        "category": "对阵档位",
+        "data_source": "对阵联赛前4名球队的战绩",
+        "calculation": "对阵强队的胜率",
+        "formula": "vs_top = 胜场 / 对阵前4的总场次",
+        "weight_factor": "无",
+        "example": "对前4名5场2胜 → 胜率=40%",
+    },
+    "vs_mid_tier_win_rate": {
+        "category": "对阵档位",
+        "data_source": "对阵联赛5-10名球队的战绩",
+        "calculation": "对阵中游队的胜率",
+        "formula": "vs_mid = 胜场 / 对阵中游的总场次",
+        "weight_factor": "无",
+        "example": "对中游6场4胜 → 胜率=67%",
+    },
+    "vs_bottom_tier_win_rate": {
+        "category": "对阵档位",
+        "data_source": "对阵联赛后4名球队的战绩",
+        "calculation": "对阵弱队的胜率",
+        "formula": "vs_bottom = 胜场 / 对阵后4的总场次",
+        "weight_factor": "无",
+        "example": "对后4名4场4胜 → 胜率=100%（虐菜能力强）",
+    },
+    "vs_top_half_points": {
+        "category": "对阵档位",
+        "data_source": "对阵联赛上半区球队的场均积分",
+        "calculation": "强强对话的得分能力",
+        "formula": "pts = 总积分 / 对阵上半区场次",
+        "weight_factor": "无",
+        "example": "对前10名10场得15分 → 场均1.5分",
+    },
+    "vs_bottom_half_xg": {
+        "category": "对阵档位",
+        "data_source": "对阵联赛下半区球队的场均xG",
+        "calculation": "虐菜时的进攻效率",
+        "formula": "xg = 总xG / 对阵下半区场次",
+        "weight_factor": "无",
+        "example": "对后10名8场xG总和12 → 场均1.5",
+    },
+
+    # ========== 战意因子 ==========
+    "motivation_score": {
+        "category": "战意",
+        "data_source": "联赛排名与目标的差距",
+        "calculation": "综合欧冠区、欧联区、保级区的距离",
+        "formula": "motivation = f(距目标分差, 剩余比赛)",
+        "weight_factor": "无",
+        "example": "距欧冠区2分 → 战意强烈=0.9",
+    },
+    "champions_league_race": {
+        "category": "战意",
+        "data_source": "与欧冠区（第4名）的分差",
+        "calculation": "第4名积分 - 球队积分",
+        "formula": "gap = top4_pts - team_pts",
+        "weight_factor": "无",
+        "example": "第4名60分，球队58分 → 差距2分（还有机会）",
+    },
+    "relegation_race": {
+        "category": "战意",
+        "data_source": "与降级区的分差",
+        "calculation": "球队积分 - 降级区外名次积分",
+        "formula": "gap = team_pts - relegation_threshold",
+        "weight_factor": "无",
+        "example": "球队35分，降级线30分 → 领先5分（相对安全）",
+    },
+    "european_zone_gap": {
+        "category": "战意",
+        "data_source": "与欧战区的分差（前4或前6）",
+        "calculation": "球队与欧战区门槛的分差",
+        "formula": "gap = team_pts - european_threshold",
+        "weight_factor": "无",
+        "example": "球队42分，欧战线45分 → 落后3分",
+    },
+    "relegation_zone_gap": {
+        "category": "战意",
+        "data_source": "与降级区的分差",
+        "calculation": "球队与降级区门槛的分差",
+        "formula": "gap = team_pts - relegation_threshold",
+        "weight_factor": "无",
+        "example": "球队28分，降级线25分 → 领先3分（保级压力中等）",
+    },
+
+    # ========== 球员缺阵因子 ==========
+    "key_player_absence_impact": {
+        "category": "球员缺阵",
+        "data_source": "factor_adjustments表（手动设置）或默认值",
+        "calculation": "核心球员缺阵对进攻的量化影响（0-1，越高影响越大）",
+        "formula": "impact = 手动设置值 或 默认0.0",
+        "weight_factor": "无",
+        "example": "设置0.3表示核心球员缺阵导致进攻下降30%",
+    },
+
+    # ========== 疲劳因子 ==========
+    "fatigue_index": {
+        "category": "疲劳",
+        "data_source": "比赛间隔、赛程密度、休息天数",
+        "calculation": "基于月度比赛负载、每周比赛频率、休息天数不足的惩罚",
+        "formula": "fatigue = 0.3×monthly_load + 0.4×weekly_load + 0.3×rest_penalty",
+        "weight_factor": "无",
+        "example": "3周7天4场 → 疲劳指数=0.65（中高）",
+    },
+}
+
+# 因子分类映射
+FACTOR_CATEGORIES = {
+    "avg_expected_goals": "进攻端",
+    "avg_shots_on_target": "进攻端",
+    "avg_key_passes": "进攻端",
+    "avg_expected_goals_conceded": "防守端",
+    "avg_shots_on_target_conceded": "防守端",
+    "avg_pressing_intensity": "防守端",
+    "attack_defense_ratio": "交互",
+    "defense_attack_ratio": "交互",
+    "weighted_recent_xg": "状态趋势",
+    "weighted_recent_xgc": "状态趋势",
+    "actual_vs_expected_points": "状态趋势",
+    "h2h_win_rate": "交锋历史",
+    "h2h_avg_goals": "交锋历史",
+    "h2h_avg_conceded": "交锋历史",
+    "rest_days_diff": "赛程情景",
+    "is_home": "赛程情景",
+    "xg_variance": "稳定性",
+    "xgc_variance": "稳定性",
+    "ranking_diff": "实力",
+    "historical_ranking_diff": "实力",
+    "goal_difference_diff": "统治力",
+    "win_rate_diff": "统治力",
+    "vs_top_half_points": "对阵档位",
+    "vs_bottom_half_xg": "对阵档位",
+    "european_zone_gap": "战意",
+    "relegation_zone_gap": "战意",
+    "key_player_absence_impact": "球员缺阵",
+    "fatigue_index": "疲劳",
+}
+
+# 可调整的因子列表（需要是数值型因子）
+ADJUSTABLE_FACTORS = [
+    "avg_expected_goals", "avg_shots_on_target", "avg_key_passes",
+    "avg_expected_goals_conceded", "avg_shots_on_target_conceded", "avg_pressing_intensity",
+    "h2h_win_rate", "h2h_avg_goals", "h2h_avg_conceded",
+    "rest_days_diff", "key_player_absence_impact", "fatigue_index",
+    "vs_top_half_points", "vs_bottom_half_xg",
+    "actual_vs_expected_points", "weighted_recent_xg", "weighted_recent_xgc",
+]
+
+
+def _apply_factor_adjustments(conn: sqlite3.Connection, team_id: int,
+                              factors: Dict[str, float]) -> Dict[str, float]:
+    """应用手动因子调整
+
+    Args:
+        conn: 数据库连接
+        team_id: 球队ID
+        factors: 原始因子字典
+
+    Returns:
+        应用调整后的因子字典
+    """
+    adjustments = db.get_active_factor_adjustments(conn, team_id)
+    if not adjustments:
+        return factors
+
+    adjusted_factors = factors.copy()
+    for adj in adjustments:
+        factor_name = adj["factor_name"]
+        if factor_name in adjusted_factors:
+            adjusted_factors[factor_name] = adj["adjusted_value"]
+
+    return adjusted_factors
+
 
 def _get_team_recent_stats(conn: sqlite3.Connection, team_id: int,
                            limit: int = RECENT_MATCHES_WINDOW) -> List[Dict[str, Any]]:
@@ -907,6 +1419,18 @@ def calculate_all_factors(conn: sqlite3.Connection, home_team_id: int,
     # 疲劳因子
     all_factors["home_fatigue_index"] = home_fatigue["fatigue_index"]
     all_factors["away_fatigue_index"] = away_fatigue["fatigue_index"]
+
+    # 应用手动因子调整
+    home_factors_dict = {k.replace("home_", ""): v for k, v in all_factors.items() if k.startswith("home_")}
+    away_factors_dict = {k.replace("away_", ""): v for k, v in all_factors.items() if k.startswith("away_")}
+
+    adjusted_home = _apply_factor_adjustments(conn, home_team_id, home_factors_dict)
+    adjusted_away = _apply_factor_adjustments(conn, away_team_id, away_factors_dict)
+
+    for key, value in adjusted_home.items():
+        all_factors[f"home_{key}"] = value
+    for key, value in adjusted_away.items():
+        all_factors[f"away_{key}"] = value
 
     return all_factors
 

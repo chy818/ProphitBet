@@ -36,10 +36,11 @@ env/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Database
+# Database (local data - DO NOT commit to git)
 *.db
 *.sqlite
 *.sqlite3
+data/
 
 # Model files (optional, can be regenerated)
 data/models/*.joblib
@@ -56,9 +57,10 @@ Thumbs.db
 # Streamlit
 .streamlit/
 
-# Environment variables
+# Environment variables (API keys - DO NOT commit)
 .env
 .env.local
+.env.*
 
 # Trae IDE
 .trae/
