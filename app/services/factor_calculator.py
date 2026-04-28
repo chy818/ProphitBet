@@ -602,6 +602,62 @@ def _apply_factor_adjustments(conn: sqlite3.Connection, team_id: int,
     return adjusted_factors
 
 
+def _apply_factor_switches(conn: sqlite3.Connection, factors: Dict[str, float]) -> Dict[str, float]:
+    """应用因子开关过滤
+
+    Args:
+        conn: 数据库连接
+        factors: 原始因子字典
+
+    Returns:
+        过滤后的因子字典（只包含启用的因子）
+    """
+    try:
+        enabled_factors = db.get_enabled_factor_switches(conn)
+    except Exception:
+        # 表不存在时默认所有因子启用，直接返回原始因子
+        return factors
+
+    if not enabled_factors:
+        return factors
+
+    filtered_factors = {}
+    for key, value in factors.items():
+        # 检查因子名是否在启用列表中（支持home_xxx和away_xxx格式）
+        base_name = key.replace("home_", "").replace("away_", "")
+        if base_name in enabled_factors:
+            filtered_factors[key] = value
+        else:
+            # 禁用的因子设为默认值（0或根据因子类型的合理默认值）
+            if "win_rate" in key or "prob" in key:
+                filtered_factors[key] = 0.5  # 胜率类因子默认0.5
+            elif "diff" in key or "gap" in key:
+                filtered_factors[key] = 0.0   # 差值类因子默认0
+            elif "is_home" in key:
+                filtered_factors[key] = 1.0 if "home_" in key else 0.0  # 主场标识保持不变
+            else:
+                filtered_factors[key] = 0.0   # 其他因子默认0
+
+    return filtered_factors
+
+
+def get_all_factor_names() -> List[str]:
+    """获取所有因子名称列表（不含home_/away_前缀）"""
+    return list(FACTOR_NAMES.keys())
+
+
+def get_factor_info_for_switch() -> List[Dict[str, str]]:
+    """获取用于初始化开关的因子信息列表"""
+    result = []
+    for factor_name in FACTOR_NAMES.keys():
+        result.append({
+            "name": factor_name,
+            "category": FACTOR_CATEGORIES.get(factor_name, "其他"),
+            "description": FACTOR_DESCRIPTIONS.get(factor_name, "")
+        })
+    return result
+
+
 def _get_team_recent_stats(conn: sqlite3.Connection, team_id: int,
                            limit: int = RECENT_MATCHES_WINDOW) -> List[Dict[str, Any]]:
     """获取球队近期比赛统计数据
@@ -1431,6 +1487,9 @@ def calculate_all_factors(conn: sqlite3.Connection, home_team_id: int,
         all_factors[f"home_{key}"] = value
     for key, value in adjusted_away.items():
         all_factors[f"away_{key}"] = value
+
+    # 应用因子开关过滤
+    all_factors = _apply_factor_switches(conn, all_factors)
 
     return all_factors
 

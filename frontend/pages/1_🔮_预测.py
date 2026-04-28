@@ -9,11 +9,14 @@ import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
 
-from app.database import get_connection, get_all_teams, get_all_leagues
+from app.database import get_connection, get_all_teams, get_all_leagues, init_database
 from app.services.prediction_service import predict_match
 from app.services.factor_calculator import get_factor_display_info
 
 st.set_page_config(page_title="比赛预测", page_icon="🔮", layout="wide")
+
+# 确保数据库已初始化（包括新建的factor_switches表）
+init_database()
 
 st.title("🔮 比赛预测")
 st.markdown("选择比赛，获取基于因子化模型的概率预测")

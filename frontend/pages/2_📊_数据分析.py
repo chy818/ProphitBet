@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
 
-from app.database import get_connection, get_all_teams, get_all_leagues
+from app.database import get_connection, get_all_teams, get_all_leagues, init_database
 from app.services.data_cleaner import clean_and_prepare_data
 from app.services.factor_calculator import (
     calc_offensive_factors, calc_defensive_factors,
@@ -18,6 +18,9 @@ from app.services.factor_calculator import (
 )
 
 st.set_page_config(page_title="数据分析", page_icon="📊", layout="wide")
+
+# 确保数据库已初始化（包括新建的factor_switches表）
+init_database()
 
 st.title("📊 数据分析")
 st.markdown("查看球队数据对比、因子分析和联赛积分榜")

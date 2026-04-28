@@ -8,16 +8,22 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 
-from app.database import get_connection, get_all_teams, get_all_leagues, get_db
+from app.database import get_connection, get_all_teams, get_all_leagues, get_db, init_database
 from app.database import (insert_factor_adjustment, get_active_factor_adjustments,
                           get_all_factor_adjustments, update_factor_adjustment,
-                          deactivate_factor_adjustment, delete_factor_adjustment)
+                          deactivate_factor_adjustment, delete_factor_adjustment,
+                          init_factor_switches, get_all_factor_switches, update_factor_switch,
+                          enable_all_factors, disable_all_factors)
 from app.services.data_collector import fetch_external_data
 from app.services.football_data_collector import fetch_football_data, fetch_historical_data
-from app.services.factor_calculator import (FACTOR_NAMES, FACTOR_CATEGORIES,
-                                            ADJUSTABLE_FACTORS, calculate_all_factors)
+from app.services.factor_calculator import (FACTOR_NAMES, FACTOR_CATEGORIES, FACTOR_DESCRIPTIONS,
+                                            ADJUSTABLE_FACTORS, calculate_all_factors,
+                                            get_factor_info_for_switch)
 
 st.set_page_config(page_title="数据管理", page_icon="⚙️", layout="wide")
+
+# 确保数据库已初始化（包括新建的factor_switches表）
+init_database()
 
 st.title("⚙️ 数据管理")
 st.markdown("手动录入比赛数据、管理球队信息、刷新API数据、手动调整因子")
@@ -360,9 +366,9 @@ try:
         > 调整后的因子会影响后续的预测结果。
         """)
 
-        # 子标签页：添加调整 / 查看调整 / 管理调整 / 因子说明 / 球队因子值
-        adj_tab1, adj_tab2, adj_tab3, adj_tab4, adj_tab5 = st.tabs(
-            ["➕ 添加调整", "📋 当前生效", "🗂️ 全部记录", "📖 因子说明", "📊 球队因子值"]
+        # 子标签页：添加调整 / 查看调整 / 管理调整 / 因子说明 / 球队因子值 / 因子开关
+        adj_tab1, adj_tab2, adj_tab3, adj_tab4, adj_tab5, adj_tab6 = st.tabs(
+            ["➕ 添加调整", "📋 当前生效", "🗂️ 全部记录", "📖 因子说明", "📊 球队因子值", "🔌 因子开关"]
         )
 
         with adj_tab1:
@@ -671,6 +677,118 @@ try:
                         file_name=f"{selected_team_for_factors}_factors.csv",
                         mime="text/csv"
                     )
+
+        with adj_tab6:
+            """因子开关管理"""
+            st.markdown("#### 🔌 因子开关管理")
+            st.markdown("""
+                > **说明**：通过开关控制每个因子是否参与预测计算。
+                > 禁用的因子将被设置为默认值（胜率类设为0.5，差值类设为0）。
+                > 开关状态会立即影响所有后续的预测结果。
+            """)
+
+            # 初始化因子开关（如果数据库中不存在）
+            with get_db() as db_conn:
+                factor_info_list = get_factor_info_for_switch()
+                init_factor_switches(db_conn, factor_info_list)
+
+            # 获取当前开关状态
+            factor_switches = get_all_factor_switches(conn)
+
+            if not factor_switches:
+                st.warning("暂无因子开关数据，请刷新页面初始化")
+                if st.button("🔄 初始化因子开关"):
+                    with get_db() as db_conn:
+                        factor_info_list = get_factor_info_for_switch()
+                        init_factor_switches(db_conn, factor_info_list)
+                    st.success("初始化完成！")
+                    st.rerun()
+            else:
+                # 统计信息
+                enabled_count = sum(1 for fs in factor_switches if fs["is_enabled"])
+                total_count = len(factor_switches)
+
+                col_s1, col_s2 = st.columns(2)
+                col_s1.metric("启用的因子", enabled_count)
+                col_s2.metric("总因子数", total_count)
+
+                # 批量操作按钮
+                st.markdown("---")
+                col_batch1, col_batch2 = st.columns(2)
+                with col_batch1:
+                    if st.button("✅ 启用所有因子", use_container_width=True):
+                        with get_db() as db_conn:
+                            enable_all_factors(db_conn)
+                        st.success("已启用所有因子")
+                        st.rerun()
+                with col_batch2:
+                    if st.button("⛔ 禁用所有因子", use_container_width=True):
+                        with get_db() as db_conn:
+                            disable_all_factors(db_conn)
+                        st.success("已禁用所有因子")
+                        st.rerun()
+
+                # 按分类展示开关
+                st.markdown("---")
+                st.markdown("#### 按分类管理因子开关")
+
+                category_order = ["进攻端", "防守端", "交互", "状态趋势", "交锋历史",
+                                "赛程情景", "稳定性", "实力", "统治力", "对阵档位",
+                                "战意", "球员缺阵", "疲劳"]
+
+                for category in category_order:
+                    factors_in_category = [fs for fs in factor_switches if fs["factor_category"] == category]
+                    if factors_in_category:
+                        with st.expander(f"**{category}**（{len(factors_in_category)}个因子）", expanded=True):
+                            for fs in factors_in_category:
+                                factor_name = fs["factor_name"]
+                                display_name = FACTOR_NAMES.get(factor_name, factor_name)
+                                description = FACTOR_DESCRIPTIONS.get(factor_name, "")
+
+                                col_switch, col_name, col_desc = st.columns([1, 2, 5])
+                                with col_switch:
+                                    switch_state = st.checkbox(
+                                        "",
+                                        value=bool(fs["is_enabled"]),
+                                        key=f"switch_{factor_name}",
+                                        on_change=None
+                                    )
+                                with col_name:
+                                    st.markdown(f"**{display_name}**")
+                                    st.markdown(f"`{factor_name}`")
+                                with col_desc:
+                                    if description:
+                                        st.markdown(f"{description}")
+
+                                # 检测开关状态变化并更新
+                                if switch_state != bool(fs["is_enabled"]):
+                                    with get_db() as db_conn:
+                                        update_factor_switch(db_conn, factor_name, switch_state)
+                                    st.rerun()
+
+                # 快速筛选
+                st.markdown("---")
+                st.markdown("#### 快速筛选")
+                filter_options = ["全部", "仅启用", "仅禁用"]
+                filter_selected = st.selectbox("筛选状态", filter_options, key="switch_filter")
+
+                if filter_selected == "仅启用":
+                    filtered_switches = [fs for fs in factor_switches if fs["is_enabled"]]
+                elif filter_selected == "仅禁用":
+                    filtered_switches = [fs for fs in factor_switches if not fs["is_enabled"]]
+                else:
+                    filtered_switches = factor_switches
+
+                if filtered_switches:
+                    df_switches = pd.DataFrame(filtered_switches)
+                    df_switches["因子名称"] = df_switches["factor_name"].map(FACTOR_NAMES)
+                    df_switches["状态"] = df_switches["is_enabled"].apply(lambda x: "✅ 启用" if x else "⛔ 禁用")
+                    display_cols = ["因子名称", "factor_category", "状态"]
+                    df_display = df_switches[display_cols].copy()
+                    df_display.columns = ["因子名称", "分类", "状态"]
+                    st.dataframe(df_display, use_container_width=True, hide_index=True)
+                else:
+                    st.info("没有符合条件的因子")
 
 finally:
     conn.close()

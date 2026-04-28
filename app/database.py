@@ -156,6 +156,19 @@ def init_database():
             )
         """)
 
+        # 创建因子开关表（用于全局控制因子的启用/禁用）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS factor_switches (
+                switch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                factor_name VARCHAR(100) NOT NULL UNIQUE,
+                factor_category VARCHAR(50) NOT NULL,
+                is_enabled BOOLEAN DEFAULT 1,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # 创建索引以提升查询性能
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_home_team ON matches(home_team_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_away_team ON matches(away_team_id)")
@@ -496,3 +509,98 @@ def get_team_id_by_name(conn: sqlite3.Connection, team_name: str) -> Optional[in
     cursor.execute("SELECT team_id FROM teams WHERE team_name = ?", (team_name,))
     row = cursor.fetchone()
     return row[0] if row else None
+
+
+# ==================== 因子开关 CRUD ====================
+
+def init_factor_switches(conn: sqlite3.Connection, factor_list: List[Dict[str, str]]) -> None:
+    """初始化因子开关，确保所有因子都有对应的开关记录"""
+    cursor = conn.cursor()
+    for factor in factor_list:
+        cursor.execute(
+            """INSERT OR IGNORE INTO factor_switches
+               (factor_name, factor_category, is_enabled, description)
+               VALUES (?, ?, ?, ?)""",
+            (factor["name"], factor["category"], True, factor.get("description", ""))
+        )
+    conn.commit()
+
+
+def get_all_factor_switches(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """获取所有因子开关状态"""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM factor_switches
+        ORDER BY factor_category, factor_name
+    """)
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_enabled_factor_switches(conn: sqlite3.Connection) -> List[str]:
+    """获取所有启用的因子名称"""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT factor_name FROM factor_switches
+        WHERE is_enabled = 1
+    """)
+    return [row["factor_name"] for row in cursor.fetchall()]
+
+
+def update_factor_switch(conn: sqlite3.Connection, factor_name: str, is_enabled: bool) -> bool:
+    """更新因子开关状态"""
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE factor_switches
+           SET is_enabled = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE factor_name = ?""",
+        (is_enabled, factor_name)
+    )
+    return cursor.rowcount > 0
+
+
+def toggle_factor_switch(conn: sqlite3.Connection, factor_name: str) -> bool:
+    """切换因子开关状态"""
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE factor_switches
+           SET is_enabled = NOT is_enabled, updated_at = CURRENT_TIMESTAMP
+           WHERE factor_name = ?""",
+        (factor_name,)
+    )
+    return cursor.rowcount > 0
+
+
+def batch_update_factor_switches(conn: sqlite3.Connection, switches: Dict[str, bool]) -> int:
+    """批量更新因子开关状态"""
+    cursor = conn.cursor()
+    updated_count = 0
+    for factor_name, is_enabled in switches.items():
+        cursor.execute(
+            """UPDATE factor_switches
+               SET is_enabled = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE factor_name = ?""",
+            (is_enabled, factor_name)
+        )
+        if cursor.rowcount > 0:
+            updated_count += 1
+    return updated_count
+
+
+def enable_all_factors(conn: sqlite3.Connection) -> int:
+    """启用所有因子"""
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE factor_switches
+        SET is_enabled = 1, updated_at = CURRENT_TIMESTAMP
+    """)
+    return cursor.rowcount
+
+
+def disable_all_factors(conn: sqlite3.Connection) -> int:
+    """禁用所有因子"""
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE factor_switches
+        SET is_enabled = 0, updated_at = CURRENT_TIMESTAMP
+    """)
+    return cursor.rowcount
