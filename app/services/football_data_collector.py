@@ -246,7 +246,8 @@ def _fetch_matches(conn: sqlite3.Connection, code: str,
             result = "客胜"
 
         # 检查比赛是否已存在
-        if not _match_exists(conn, home_team_id, away_team_id, match_date):
+        if not _match_exists(conn, home_team_id, away_team_id, match_date,
+                             league_id=league_id, season=season_str):
             match_id = db.insert_match(
                 conn, home_team_id, away_team_id,
                 match_date, league_id, season_str,
@@ -434,6 +435,8 @@ def _normalize_team_name(name: str) -> str:
         "Celta Vigo": "塞尔塔",
         "Espanyol": "西班牙人",
         "Getafe": "赫塔菲",
+        "Elche CF": "埃尔切",
+        "Elche": "埃尔切",
         "Las Palmas": "拉斯帕尔马斯",
         "Leganés": "莱加内斯",
         "Leganes": "莱加内斯",
@@ -534,7 +537,8 @@ def _normalize_team_name(name: str) -> str:
 
 
 def _match_exists(conn: sqlite3.Connection, home_team_id: int,
-                  away_team_id: int, match_date: str) -> bool:
+                  away_team_id: int, match_date: str,
+                  league_id: int = None, season: str = None) -> bool:
     """检查比赛是否已存在
 
     Args:
@@ -542,19 +546,29 @@ def _match_exists(conn: sqlite3.Connection, home_team_id: int,
         home_team_id: 主队ID
         away_team_id: 客队ID
         match_date: 比赛日期
+        league_id: 联赛ID（可选，用于更精确匹配）
+        season: 赛季（可选，用于更精确匹配）
 
     Returns:
         是否已存在
     """
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            """
+        query = """
             SELECT match_id FROM matches
             WHERE home_team_id = ? AND away_team_id = ? AND match_date = ?
-            """,
-            (home_team_id, away_team_id, match_date)
-        )
+        """
+        params = [home_team_id, away_team_id, match_date]
+
+        if league_id is not None:
+            query += " AND league_id = ?"
+            params.append(league_id)
+
+        if season is not None:
+            query += " AND season = ?"
+            params.append(season)
+
+        cursor.execute(query, params)
         return cursor.fetchone() is not None
     except Exception:
         return False
