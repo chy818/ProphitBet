@@ -9,11 +9,11 @@ from app.config import MODEL_DIR
 from app.services.factor_calculator import calculate_all_factors, get_factor_display_info, FACTOR_NAMES
 from app.ml.win_loss_model import (
     load_model as load_win_loss_model,
-    RESULT_MAP_INV, FEATURE_COLUMNS as WIN_LOSS_FEATURES,
+    RESULT_MAP_INV, DEFAULT_FEATURE_COLUMNS as WIN_LOSS_DEFAULT_FEATURES,
 )
 from app.ml.goals_model import (
     load_goals_model, predict_double_poisson,
-    GOALS_FEATURE_COLUMNS, CONCEDED_FEATURE_COLUMNS,
+    DEFAULT_GOALS_FEATURE_COLUMNS, DEFAULT_CONCEDED_FEATURE_COLUMNS,
 )
 from app import database as db
 

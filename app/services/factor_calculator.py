@@ -658,6 +658,172 @@ def get_factor_info_for_switch() -> List[Dict[str, str]]:
     return result
 
 
+def get_enabled_feature_columns(conn: sqlite3.Connection) -> List[str]:
+    """根据启用的因子动态生成胜负模型的特征列
+
+    Args:
+        conn: 数据库连接
+
+    Returns:
+        启用的特征列名列表（含home_/away_前缀）
+    """
+    try:
+        enabled_base_names = db.get_enabled_factor_switches(conn)
+    except Exception:
+        enabled_base_names = list(FACTOR_NAMES.keys())
+
+    if not enabled_base_names:
+        enabled_base_names = list(FACTOR_NAMES.keys())
+
+    enabled_set = set(enabled_base_names)
+    feature_columns = []
+
+    # 按原始顺序生成特征列，保持与FACTOR_NAMES一致
+    for base_name in FACTOR_NAMES.keys():
+        if base_name not in enabled_set:
+            continue
+
+        if base_name in ("attack_defense_ratio", "defense_attack_ratio",
+                         "ranking_diff", "historical_ranking_diff",
+                         "goal_difference_diff", "win_rate_diff"):
+            # 交互/实力/统治力因子：无home_/away_前缀
+            feature_columns.append(base_name)
+        elif base_name in ("h2h_win_rate", "h2h_avg_goals", "h2h_avg_conceded"):
+            # 交锋历史因子：无home_/away_前缀
+            feature_columns.append(base_name)
+        elif base_name in ("rest_days_diff", "is_home"):
+            # 赛程情景因子：无home_/away_前缀
+            feature_columns.append(base_name)
+        else:
+            # 进攻/防守/状态/稳定性/对阵/战意/球员/疲劳因子：有home_和away_前缀
+            feature_columns.append(f"home_{base_name}")
+            feature_columns.append(f"away_{base_name}")
+
+    return feature_columns
+
+
+def get_enabled_goals_feature_columns(conn: sqlite3.Connection) -> Tuple[List[str], List[str]]:
+    """根据启用的因子动态生成进球模型的特征列
+
+    Args:
+        conn: 数据库连接
+
+    Returns:
+        (主队进球特征列, 客队进球特征列)的元组
+    """
+    try:
+        enabled_base_names = db.get_enabled_factor_switches(conn)
+    except Exception:
+        enabled_base_names = list(FACTOR_NAMES.keys())
+
+    if not enabled_base_names:
+        enabled_base_names = list(FACTOR_NAMES.keys())
+
+    enabled_set = set(enabled_base_names)
+
+    # 主队进球特征：主队进攻 + 客队防守 + 交互 + 交锋 + 赛程 + 实力
+    home_goals_features = []
+    # 客队进球特征：客队进攻 + 主队防守 + 交互 + 交锋 + 赛程 + 实力
+    away_goals_features = []
+
+    # 进攻端因子
+    offensive = ["avg_expected_goals", "avg_shots_on_target", "avg_key_passes"]
+    # 防守端因子
+    defensive = ["avg_expected_goals_conceded", "avg_shots_on_target_conceded"]
+    # 交互因子
+    interaction = ["attack_defense_ratio", "defense_attack_ratio"]
+    # 状态趋势因子
+    form = ["weighted_recent_xg", "weighted_recent_xgc"]
+    # 交锋因子
+    h2h = ["h2h_avg_goals", "h2h_avg_conceded"]
+    # 稳定性因子
+    stability = ["xg_variance", "xgc_variance"]
+    # 对阵档位因子
+    vs_tier = ["vs_bottom_half_xg"]
+    # 球员缺阵因子
+    player = ["key_player_absence_impact"]
+    # 疲劳因子
+    fatigue = ["fatigue_index"]
+    # 赛程因子
+    schedule = ["is_home", "rest_days_diff"]
+    # 实力因子
+    strength = ["ranking_diff", "goal_difference_diff"]
+
+    # 主队进球特征
+    for f in offensive:
+        if f in enabled_set:
+            home_goals_features.append(f"home_{f}")
+    for f in defensive:
+        if f in enabled_set:
+            home_goals_features.append(f"away_{f}")
+    for f in interaction:
+        if f in enabled_set:
+            home_goals_features.append(f)
+    for f in form:
+        if f in enabled_set:
+            home_goals_features.append(f"home_{f}" if f == "weighted_recent_xg" else f"away_{f}")
+    for f in h2h:
+        if f in enabled_set:
+            home_goals_features.append(f)
+    for f in stability:
+        if f in enabled_set:
+            home_goals_features.append(f"home_{f}" if f == "xg_variance" else f"away_{f}")
+    for f in vs_tier:
+        if f in enabled_set:
+            home_goals_features.append(f"home_{f}")
+    for f in player:
+        if f in enabled_set:
+            home_goals_features.append(f"home_{f}")
+    for f in fatigue:
+        if f in enabled_set:
+            home_goals_features.append(f"home_{f}")
+            home_goals_features.append(f"away_{f}")
+    for f in schedule:
+        if f in enabled_set:
+            home_goals_features.append(f)
+    for f in strength:
+        if f in enabled_set:
+            home_goals_features.append(f)
+
+    # 客队进球特征
+    for f in offensive:
+        if f in enabled_set:
+            away_goals_features.append(f"away_{f}")
+    for f in defensive:
+        if f in enabled_set:
+            away_goals_features.append(f"home_{f}")
+    for f in interaction:
+        if f in enabled_set:
+            away_goals_features.append(f)
+    for f in form:
+        if f in enabled_set:
+            away_goals_features.append(f"away_{f}" if f == "weighted_recent_xg" else f"home_{f}")
+    for f in h2h:
+        if f in enabled_set:
+            away_goals_features.append(f)
+    for f in stability:
+        if f in enabled_set:
+            away_goals_features.append(f"away_{f}" if f == "xg_variance" else f"home_{f}")
+    for f in vs_tier:
+        if f in enabled_set:
+            away_goals_features.append(f"away_{f}")
+    for f in player:
+        if f in enabled_set:
+            away_goals_features.append(f"away_{f}")
+    for f in fatigue:
+        if f in enabled_set:
+            away_goals_features.append(f"home_{f}")
+            away_goals_features.append(f"away_{f}")
+    for f in schedule:
+        if f in enabled_set:
+            away_goals_features.append(f)
+    for f in strength:
+        if f in enabled_set:
+            away_goals_features.append(f)
+
+    return home_goals_features, away_goals_features
+
+
 def _get_team_recent_stats(conn: sqlite3.Connection, team_id: int,
                            limit: int = RECENT_MATCHES_WINDOW) -> List[Dict[str, Any]]:
     """获取球队近期比赛统计数据

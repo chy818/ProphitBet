@@ -12,12 +12,12 @@ import xgboost as xgb
 import joblib
 
 from app.config import MODEL_DIR, CROSS_VALIDATION_FOLDS, RANDOM_SEED
-from app.services.factor_calculator import calculate_all_factors
+from app.services.factor_calculator import calculate_all_factors, get_enabled_goals_feature_columns
 from app import database as db
 
 
-# 进球数模型特征列
-GOALS_FEATURE_COLUMNS = [
+# 默认进球数模型特征列（所有因子启用时使用）
+DEFAULT_GOALS_FEATURE_COLUMNS = [
     "home_avg_expected_goals", "home_avg_shots_on_target", "home_avg_key_passes",
     "away_avg_expected_goals_conceded", "away_avg_shots_on_target_conceded",
     "attack_defense_ratio",
@@ -31,7 +31,7 @@ GOALS_FEATURE_COLUMNS = [
     "ranking_diff", "goal_difference_diff",
 ]
 
-CONCEDED_FEATURE_COLUMNS = [
+DEFAULT_CONCEDED_FEATURE_COLUMNS = [
     "away_avg_expected_goals", "away_avg_shots_on_target", "away_avg_key_passes",
     "home_avg_expected_goals_conceded", "home_avg_shots_on_target_conceded",
     "defense_attack_ratio",
@@ -45,18 +45,43 @@ CONCEDED_FEATURE_COLUMNS = [
     "ranking_diff", "goal_difference_diff",
 ]
 
+# 兼容旧代码的别名
+GOALS_FEATURE_COLUMNS = DEFAULT_GOALS_FEATURE_COLUMNS
+CONCEDED_FEATURE_COLUMNS = DEFAULT_CONCEDED_FEATURE_COLUMNS
 
-def prepare_goals_training_data(conn=None) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
+
+def prepare_goals_training_data(conn=None,
+                                 home_features: Optional[List[str]] = None,
+                                 away_features: Optional[List[str]] = None) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
     """准备进球数模型的训练数据
 
     Args:
         conn: 数据库连接
+        home_features: 主队进球特征列，None则根据启用的因子动态生成
+        away_features: 客队进球特征列，None则根据启用的因子动态生成
 
     Returns:
         (特征DataFrame, 主队进球Series, 客队进球Series)的元组
     """
     if conn is None:
         conn = db.get_connection()
+
+    # 动态获取启用的特征列
+    if home_features is None or away_features is None:
+        try:
+            dyn_home, dyn_away = get_enabled_goals_feature_columns(conn)
+            if home_features is None:
+                home_features = dyn_home
+            if away_features is None:
+                away_features = dyn_away
+        except Exception:
+            home_features = home_features or DEFAULT_GOALS_FEATURE_COLUMNS
+            away_features = away_features or DEFAULT_CONCEDED_FEATURE_COLUMNS
+
+    if not home_features:
+        home_features = DEFAULT_GOALS_FEATURE_COLUMNS
+    if not away_features:
+        away_features = DEFAULT_CONCEDED_FEATURE_COLUMNS
 
     try:
         cursor = conn.cursor()
@@ -73,8 +98,8 @@ def prepare_goals_training_data(conn=None) -> Tuple[pd.DataFrame, pd.Series, pd.
         if not matches:
             return pd.DataFrame(), pd.Series(), pd.Series()
 
-        home_features = []
-        away_features = []
+        home_features_list = []
+        away_features_list = []
         home_goals_list = []
         away_goals_list = []
 
@@ -85,27 +110,27 @@ def prepare_goals_training_data(conn=None) -> Tuple[pd.DataFrame, pd.Series, pd.
                     match["league_id"], match["season"], match["match_date"]
                 )
 
-                home_feat = {col: factors.get(col, 0.0) for col in GOALS_FEATURE_COLUMNS}
-                away_feat = {col: factors.get(col, 0.0) for col in CONCEDED_FEATURE_COLUMNS}
+                home_feat = {col: factors.get(col, 0.0) for col in home_features}
+                away_feat = {col: factors.get(col, 0.0) for col in away_features}
 
-                home_features.append(home_feat)
-                away_features.append(away_feat)
+                home_features_list.append(home_feat)
+                away_features_list.append(away_feat)
                 home_goals_list.append(match["home_goals"])
                 away_goals_list.append(match["away_goals"])
             except Exception:
                 continue
 
-        if not home_features:
+        if not home_features_list:
             return pd.DataFrame(), pd.Series(), pd.Series()
 
         # 合并主客队特征
-        X_home = pd.DataFrame(home_features).fillna(0.0)
-        X_away = pd.DataFrame(away_features).fillna(0.0)
+        X_home = pd.DataFrame(home_features_list).fillna(0.0)
+        X_away = pd.DataFrame(away_features_list).fillna(0.0)
 
         # 拼接特征
         X = pd.concat([X_home, X_away], axis=1)
-        X.columns = [f"home_{col}" if i < len(GOALS_FEATURE_COLUMNS) else f"away_{col}"
-                     for i, col in enumerate(GOALS_FEATURE_COLUMNS + CONCEDED_FEATURE_COLUMNS)]
+        X.columns = [f"home_{col}" if i < len(home_features) else f"away_{col}"
+                     for i, col in enumerate(home_features + away_features)]
 
         y_home = pd.Series(home_goals_list)
         y_away = pd.Series(away_goals_list)
@@ -266,13 +291,18 @@ def predict_double_poisson(home_expected_goals: float,
     }
 
 
-def save_goals_model(home_model: Any, away_model: Any, model_name: str = "goals_xgboost") -> str:
+def save_goals_model(home_model: Any, away_model: Any,
+                     model_name: str = "goals_xgboost",
+                     home_features: Optional[List[str]] = None,
+                     away_features: Optional[List[str]] = None) -> str:
     """保存进球数模型
 
     Args:
         home_model: 主队进球模型
         away_model: 客队进球模型
         model_name: 模型名称
+        home_features: 主队特征列名
+        away_features: 客队特征列名
 
     Returns:
         保存路径
@@ -282,8 +312,8 @@ def save_goals_model(home_model: Any, away_model: Any, model_name: str = "goals_
     save_data = {
         "home_model": home_model,
         "away_model": away_model,
-        "home_features": GOALS_FEATURE_COLUMNS,
-        "away_features": CONCEDED_FEATURE_COLUMNS,
+        "home_features": home_features or DEFAULT_GOALS_FEATURE_COLUMNS,
+        "away_features": away_features or DEFAULT_CONCEDED_FEATURE_COLUMNS,
     }
     joblib.dump(save_data, model_path)
     return model_path
@@ -304,8 +334,8 @@ def load_goals_model(model_name: str = "goals_xgboost") -> Tuple[Any, Any, List[
 
     save_data = joblib.load(model_path)
     return (save_data["home_model"], save_data["away_model"],
-            save_data.get("home_features", GOALS_FEATURE_COLUMNS),
-            save_data.get("away_features", CONCEDED_FEATURE_COLUMNS))
+            save_data.get("home_features", DEFAULT_GOALS_FEATURE_COLUMNS),
+            save_data.get("away_features", DEFAULT_CONCEDED_FEATURE_COLUMNS))
 
 
 def train_and_save_goals_models() -> Dict[str, Any]:
@@ -315,15 +345,34 @@ def train_and_save_goals_models() -> Dict[str, Any]:
         训练结果摘要
     """
     conn = db.get_connection()
+
+    # 获取启用的特征列
     try:
-        X, y_home, y_away = prepare_goals_training_data(conn)
-    finally:
+        home_features, away_features = get_enabled_goals_feature_columns(conn)
+    except Exception:
+        home_features = DEFAULT_GOALS_FEATURE_COLUMNS
+        away_features = DEFAULT_CONCEDED_FEATURE_COLUMNS
+
+    if not home_features:
+        home_features = DEFAULT_GOALS_FEATURE_COLUMNS
+    if not away_features:
+        away_features = DEFAULT_CONCEDED_FEATURE_COLUMNS
+
+    try:
+        X, y_home, y_away = prepare_goals_training_data(conn, home_features, away_features)
+    except Exception:
         conn.close()
+        return {"error": "训练数据准备失败"}
 
     if X.empty or y_home.empty:
         return {"error": "训练数据为空，请先生成示例数据"}
 
     home_model, away_model, metrics = train_xgboost_goals(X, y_home, y_away)
-    save_goals_model(home_model, away_model)
+    save_goals_model(home_model, away_model,
+                     home_features=home_features,
+                     away_features=away_features)
+
+    metrics["enabled_home_features"] = len(home_features)
+    metrics["enabled_away_features"] = len(away_features)
 
     return metrics

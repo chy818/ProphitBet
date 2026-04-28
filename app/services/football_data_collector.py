@@ -433,7 +433,7 @@ def _normalize_team_name(name: str) -> str:
         "Celta": "塞尔塔",
         "Celta Vigo": "塞尔塔",
         "Espanyol": "西班牙人",
-        "Getafe": "赫塔费",
+        "Getafe": "赫塔菲",
         "Las Palmas": "拉斯帕尔马斯",
         "Leganés": "莱加内斯",
         "Leganes": "莱加内斯",
